@@ -85,6 +85,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("error downloading order information %s: %v", u, err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("error invalid status: %s", resp.Status)
+	}
+
 	defer resp.Body.Close()
 	buf, err := ioutil.ReadAll(resp.Body)
 	order := &HumbleBundleOrder{}
