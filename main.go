@@ -18,10 +18,11 @@ import (
 )
 
 var (
-	flags   = flag.NewFlagSet("humblebundle", flag.ExitOnError)
-	baseURL = "https://www.humblebundle.com/api/v1"
-	gameKey = flags.String("key", "", "key: Key listed in the URL params in the downloads page")
-	out     = flags.String("out", "", "out: /path/to/save/books")
+	flags      = flag.NewFlagSet("humblebundle", flag.ExitOnError)
+	baseURL    = "https://www.humblebundle.com/api/v1"
+	gameKey    = flags.String("key", "", "key: Key listed in the URL params in the downloads page")
+	sessCookie = flags.String("auth", "", "Account _simpleauth_sess cookie")
+	out        = flags.String("out", "", "out: /path/to/save/books")
 )
 
 type HumbleBundleOrder struct {
@@ -70,6 +71,10 @@ func main() {
 		log.Fatal("Missing key")
 	}
 
+	if *sessCookie == "" {
+		log.Fatal("Missing _simpleauth_sess auth cookie")
+	}
+
 	log.SetFlags(0)
 	log.SetOutput(new(logger))
 
@@ -80,8 +85,22 @@ func main() {
 	}
 	u.Path = path.Join(u.Path, "order")
 	u.Path = path.Join(u.Path, *gameKey)
+
+	// prepare request
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		log.Fatalf("fatal error creating the request : %v", err)
+	}
+	// set session cookie
+	cookie := &http.Cookie{
+		Name:  "_simpleauth_sess",
+		Value: *sessCookie,
+	}
+	req.AddCookie(cookie)
+
 	// Fetch order information
-	resp, err := http.Get(u.String())
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatalf("error downloading order information %s: %v", u, err)
 	}
@@ -105,8 +124,9 @@ func main() {
 			}
 			*out = fmt.Sprintf("%s/books", pwd)
 		} else {
-			order.Product.HumanName = strings.Replace(order.Product.HumanName, "/", "_", -1)
-			*out = order.Product.HumanName
+			cleanFilename := strings.Replace(order.Product.HumanName, "/", "_", -1)
+			cleanFilename = strings.Replace(cleanFilename, ":", "_", -1)
+			*out = cleanFilename
 		}
 	}
 	_ = os.MkdirAll(*out, 0777)
@@ -126,6 +146,7 @@ func main() {
 				group.Add(1)
 				go func(filename, downloadURL string) {
 					filename = strings.Replace(filename, "/", "_", -1)
+					filename = strings.Replace(filename, ":", "_", -1)
 					filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
 					filename = strings.Replace(filename, ".download", "_video.zip", 1)
 					defer group.Done()
@@ -150,9 +171,10 @@ func main() {
 						return
 					}
 
-					bookFile, err := os.Create(fmt.Sprintf("%s/%s", *out, filename))
+					filepath := path.Join(*out, filename)
+					bookFile, err := os.Create(filepath)
 					if err != nil {
-						log.Printf("error creating book file (%s/%s): %v", *out, filename, err)
+						log.Printf("error creating book file (%s): %v", filepath, err)
 						return
 					}
 					defer bookFile.Close()
