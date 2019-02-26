@@ -33,6 +33,10 @@ var (
 	filter     = flags.String("filter", "", "filter downloads by extension ex: mobi")
 )
 
+type humbleBundleOrderKey struct {
+	Gamekey string `json:"gamekey"`
+}
+
 type humbleDownloadType struct {
 	SHA1 string `json:"sha1"`
 	Name string `json:"name"`
@@ -78,6 +82,7 @@ func (writer logger) Write(bytes []byte) (int, error) {
 func removeIllegalCharacters(filename string) string {
 	filename = strings.Replace(filename, "/", "_", -1)
 	filename = strings.Replace(filename, ":", ";", -1)
+	filename = strings.Replace(filename, "!", "l", -1)
 	return filename
 }
 
@@ -88,7 +93,6 @@ func authGet(apiPath string, session string) (*http.Response, error) {
 		log.Fatal(err)
 	}
 	u.Path = path.Join(u.Path, apiPath)
-	log.Println(u.Path)
 
 	// prepare request
 	req, err := http.NewRequest("GET", u.String(), nil)
@@ -132,6 +136,28 @@ func isValidChecksum(downloadType humbleDownloadType, filepath string) bool {
 
 }
 
+func getOrderList(session string) []string {
+	resp, err := authGet(userOrdersPath, session)
+	if err != nil {
+		log.Fatalf("error downloading orders list: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf(" invalid http status for orders list: %s", resp.Status)
+	}
+	defer resp.Body.Close()
+	buf, err := ioutil.ReadAll(resp.Body)
+	orders := []humbleBundleOrderKey{}
+	err = json.Unmarshal(buf, &orders)
+	if err != nil {
+		log.Fatalf("error unmarshaling orders list: %v", err)
+	}
+	keys := []string{}
+	for _, order := range orders {
+		keys = append(keys, order.Gamekey)
+	}
+	return keys
+}
+
 func downloadOrder(key string, session string, parentDir string) {
 	apiPath := path.Join(orderPath, key)
 	resp, err := authGet(apiPath, session)
@@ -155,8 +181,11 @@ func downloadOrder(key string, session string, parentDir string) {
 	}
 	outputDir := path.Join(parentDir, removeIllegalCharacters(name))
 
-	_ = os.MkdirAll(*out, 0777)
-	log.Printf("Saving files into %s", *out)
+	err = os.MkdirAll(outputDir, 0777)
+	if err != nil {
+		log.Fatalf("error creating parent directory '%s' for the bundle '%s'", parentDir, name)
+	}
+	log.Printf("downloading order '%s' into '%s'", name, outputDir)
 
 	// Download all files from order
 	var group sync.WaitGroup
@@ -212,7 +241,7 @@ func downloadOrder(key string, session string, parentDir string) {
 					defer bookFile.Close()
 					_, err = io.Copy(bookFile, resp.Body)
 					if err != nil {
-						log.Printf("error copying response body to file (%s/%s): %v", *out, filename, err)
+						log.Printf("error copying response body to file '%s': '%v'", filepath, err)
 						return
 					}
 					log.Printf("Finished saving file %s", filepath)
@@ -231,17 +260,24 @@ func downloadOrder(key string, session string, parentDir string) {
 
 func main() {
 	flags.Parse(os.Args[1:])
-	if *gameKey == "" {
-		log.Fatal("Missing key")
-	}
+
+	log.SetFlags(0)
+	log.SetOutput(new(logger))
 
 	if *sessCookie == "" {
 		log.Fatal("Missing _simpleauth_sess auth cookie")
 	}
 
-	log.SetFlags(0)
-	log.SetOutput(new(logger))
-
+	if *all == true {
+		keys := getOrderList(*sessCookie)
+		for _, key := range keys {
+			downloadOrder(key, *sessCookie, *out)
+		}
+		os.Exit(0)
+	}
+	if *gameKey == "" {
+		log.Fatal("Missing key")
+	}
 	downloadOrder(*gameKey, *sessCookie, *out)
 
 }
