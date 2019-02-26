@@ -65,6 +65,12 @@ func (writer logger) Write(bytes []byte) (int, error) {
 	return fmt.Print(string(bytes))
 }
 
+func removeIllegalCharacters(filename string) string {
+	filename = strings.Replace(filename, "/", "_", -1)
+	filename = strings.Replace(filename, ":", ";", -1)
+	return filename
+}
+
 func main() {
 	flags.Parse(os.Args[1:])
 	if *gameKey == "" {
@@ -115,20 +121,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("error unmarshaling order: %v", err)
 	}
-	if *out == "" {
-		log.Printf("Human Name: %s", order.Product.HumanName)
-		if order.Product.HumanName == "" {
-			pwd, err := os.Getwd()
-			if err != nil {
-				log.Fatal(err)
-			}
-			*out = fmt.Sprintf("%s/books", pwd)
-		} else {
-			cleanFilename := strings.Replace(order.Product.HumanName, "/", "_", -1)
-			cleanFilename = strings.Replace(cleanFilename, ":", "_", -1)
-			*out = cleanFilename
-		}
+	name := order.Product.HumanName
+	if name == "" {
+		name = order.Product.MachineName
 	}
+	*out = path.Join(*out, removeIllegalCharacters(name))
+
 	_ = os.MkdirAll(*out, 0777)
 	log.Printf("Saving files into %s", *out)
 
@@ -145,8 +143,7 @@ func main() {
 				downloadType := download.DownloadTypes[x]
 				group.Add(1)
 				go func(filename, downloadURL string) {
-					filename = strings.Replace(filename, "/", "_", -1)
-					filename = strings.Replace(filename, ":", "_", -1)
+					filename = removeIllegalCharacters(filename)
 					filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
 					filename = strings.Replace(filename, ".download", "_video.zip", 1)
 					defer group.Done()
