@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash"
 	"io"
 	"io/ioutil"
 	"log"
@@ -29,9 +30,22 @@ var (
 	sessCookie = flags.String("auth", "", "Account _simpleauth_sess cookie")
 	out        = flags.String("out", "", "out: /path/to/save/books")
 	all        = flags.Bool("all", false, "download all purshases")
+	filter     = flags.String("filter", "", "filter downloads by extension ex: mobi")
 )
 
-type HumbleBundleOrder struct {
+type humbleDownloadType struct {
+	SHA1 string `json:"sha1"`
+	Name string `json:"name"`
+	URL  struct {
+		Web        string `json:"web"`
+		BitTorrent string `json:"bittorrent"`
+	} `json:"url"`
+	HumanSize string `json:"human_size"`
+	FileSize  int64  `json:"file_size"`
+	MD5       string `json:"md5"`
+}
+
+type humbleBundleOrder struct {
 	AmountSpent float64
 	Product     struct {
 		Category    string
@@ -46,20 +60,10 @@ type HumbleBundleOrder struct {
 		HumanName   string `json:"human_name"`
 		URL         string `json:"url"`
 		Downloads   []struct {
-			MachineName   string `json:"machine_name"`
-			HumanName     string `json:"human_name"`
-			Platform      string `json:"platform"`
-			DownloadTypes []struct {
-				SHA1 string `json:"sha1"`
-				Name string `json:"name"`
-				URL  struct {
-					Web        string `json:"web"`
-					BitTorrent string `json:"bittorrent"`
-				} `json:"url"`
-				HumanSize string `json:"human_size"`
-				FileSize  int64  `json:"file_size"`
-				MD5       string `json:"md5"`
-			} `json:"download_struct"`
+			MachineName   string               `json:"machine_name"`
+			HumanName     string               `json:"human_name"`
+			Platform      string               `json:"platform"`
+			DownloadTypes []humbleDownloadType `json:"download_struct"`
 		} `json:"downloads"`
 	} `json:"subproducts"`
 }
@@ -103,6 +107,31 @@ func authGet(apiPath string, session string) (*http.Response, error) {
 	return client.Do(req)
 }
 
+func isValidChecksum(downloadType humbleDownloadType, filepath string) bool {
+	f, err := os.Open(filepath)
+	if err != nil {
+		log.Printf("error reading file: %v for: %s", err, filepath)
+	}
+	defer f.Close()
+	var h hash.Hash
+	if downloadType.SHA1 != "" {
+		h = sha1.New()
+	} else {
+		h = md5.New()
+	}
+
+	if _, err := io.Copy(h, f); err != nil {
+		log.Printf("error calculating sha1sum: %v for: %s", err, filepath)
+	}
+	bs := h.Sum(nil)
+	bsString := fmt.Sprintf("%x", bs)
+	if downloadType.SHA1 != "" {
+		return downloadType.SHA1 == bsString
+	}
+	return downloadType.MD5 == bsString
+
+}
+
 func downloadOrder(key string, session string, parentDir string) {
 	apiPath := path.Join(orderPath, key)
 	resp, err := authGet(apiPath, session)
@@ -115,7 +144,7 @@ func downloadOrder(key string, session string, parentDir string) {
 
 	defer resp.Body.Close()
 	buf, err := ioutil.ReadAll(resp.Body)
-	order := &HumbleBundleOrder{}
+	order := &humbleBundleOrder{}
 	err = json.Unmarshal(buf, order)
 	if err != nil {
 		log.Fatalf("error unmarshaling order: %v", err)
@@ -142,17 +171,27 @@ func downloadOrder(key string, session string, parentDir string) {
 				downloadType := download.DownloadTypes[x]
 				group.Add(1)
 				go func(filename, downloadURL string) {
+
+					defer group.Done()
+
+					//cleanup names
 					filename = removeIllegalCharacters(filename)
 					filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
 					filename = strings.Replace(filename, ".download", "_video.zip", 1)
-					defer group.Done()
+
+					filepath := path.Join(outputDir, filename)
+
+					// if the file exist and the checksum is good don't download the file
+					_, err := os.Stat(filepath)
+					if err == nil && isValidChecksum(downloadType, filepath) {
+						log.Printf("%s already downloaded, skipping", filepath)
+					}
 					resp, err := http.Get(downloadURL)
 					if err != nil {
 						log.Printf("error downloading file %s", downloadURL)
 						return
 					}
 					defer resp.Body.Close()
-
 					bookLastmod := resp.Header.Get("Last-Modified")
 					bookLastmodTime, err := http.ParseTime(bookLastmod)
 					if err != nil {
@@ -160,21 +199,17 @@ func downloadOrder(key string, session string, parentDir string) {
 						return
 					}
 
-					// log.Printf("Last-Modified Header: ~%s~", bookLastmod)
-					// log.Printf("Download status: %d - %s", resp.StatusCode, downloadURL)
 					if resp.StatusCode < 200 || resp.StatusCode > 299 {
 						log.Printf("error status code %d", resp.StatusCode)
 						return
 					}
 
-					filepath := path.Join(outputDir, filename)
 					bookFile, err := os.Create(filepath)
 					if err != nil {
 						log.Printf("error creating book file (%s): %v", filepath, err)
 						return
 					}
 					defer bookFile.Close()
-
 					_, err = io.Copy(bookFile, resp.Body)
 					if err != nil {
 						log.Printf("error copying response body to file (%s/%s): %v", *out, filename, err)
@@ -183,46 +218,8 @@ func downloadOrder(key string, session string, parentDir string) {
 					log.Printf("Finished saving file %s", filepath)
 					os.Chtimes(filepath, bookLastmodTime, bookLastmodTime)
 
-					// log.Printf("TZ=UTC touch -d \"%s\" \"%s/%s\"", strings.Replace(fmt.Sprintf("%s", bookLastmodTime), " UTC", "", 1), *out, filename)
-					// log.Printf("\t%-9d \"%s\"", resp.ContentLength, downloadURL)
-
-					if downloadType.SHA1 != "" {
-						f, err := os.Open(filepath)
-						if err != nil {
-							log.Printf("error reading file: %v for: %s", err, filepath)
-							return
-						}
-						defer f.Close()
-
-						hash := sha1.New()
-						if _, err := io.Copy(hash, f); err != nil {
-							log.Printf("error calculating sha1sum: %v for: %s", err, filepath)
-						}
-						bs := hash.Sum(nil)
-						if downloadType.SHA1 != fmt.Sprintf("%x", bs) {
-							log.Printf("SHA1 checksum failed for %s -- expected %s but got %x", filepath, downloadType.SHA1, bs)
-						} // else {
-						// 	log.Printf("SHA1 checksum is good for %s/%s -- %x", *out, filename, bs)
-						// }
-					}
-					if downloadType.MD5 != "" {
-						f, err := os.Open(filepath)
-						if err != nil {
-							log.Printf("error reading file: %v for: %s", err, filepath)
-							return
-						}
-						defer f.Close()
-
-						hash := md5.New()
-						if _, err := io.Copy(hash, f); err != nil {
-							log.Printf("error calculating md5sum: %v for: %s", err, filepath)
-						}
-						bs := hash.Sum(nil)
-						if downloadType.MD5 != fmt.Sprintf("%x", bs) {
-							log.Printf("MD5 checksum failed for %s -- expected %s but got %x", filepath, downloadType.MD5, bs)
-						} // else {
-						// 	log.Printf("MD5 checksum is good for %s/%s -- %x", *out, filename, bs)
-						// }
+					if !isValidChecksum(downloadType, filepath) {
+						log.Printf("invalid checksum for file: %s", filepath)
 					}
 
 				}(fmt.Sprintf("%s.%s", prod.HumanName, strings.ToLower(strings.TrimPrefix(downloadType.Name, "."))), downloadType.URL.Web)
