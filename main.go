@@ -17,12 +17,18 @@ import (
 	"sync"
 )
 
+const (
+	baseURL        = "https://www.humblebundle.com/api/v1"
+	orderPath      = "/order"
+	userOrdersPath = "/user/order"
+)
+
 var (
 	flags      = flag.NewFlagSet("humblebundle", flag.ExitOnError)
-	baseURL    = "https://www.humblebundle.com/api/v1"
 	gameKey    = flags.String("key", "", "key: Key listed in the URL params in the downloads page")
 	sessCookie = flags.String("auth", "", "Account _simpleauth_sess cookie")
 	out        = flags.String("out", "", "out: /path/to/save/books")
+	all        = flags.Bool("all", false, "download all purshases")
 )
 
 type HumbleBundleOrder struct {
@@ -71,26 +77,14 @@ func removeIllegalCharacters(filename string) string {
 	return filename
 }
 
-func main() {
-	flags.Parse(os.Args[1:])
-	if *gameKey == "" {
-		log.Fatal("Missing key")
-	}
-
-	if *sessCookie == "" {
-		log.Fatal("Missing _simpleauth_sess auth cookie")
-	}
-
-	log.SetFlags(0)
-	log.SetOutput(new(logger))
-
-	// Build order endpoint URL
+func authGet(apiPath string, session string) (*http.Response, error) {
+	// Build endpoint URL
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		log.Fatal(err)
 	}
-	u.Path = path.Join(u.Path, "order")
-	u.Path = path.Join(u.Path, *gameKey)
+	u.Path = path.Join(u.Path, apiPath)
+	log.Println(u.Path)
 
 	// prepare request
 	req, err := http.NewRequest("GET", u.String(), nil)
@@ -106,12 +100,17 @@ func main() {
 
 	// Fetch order information
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	return client.Do(req)
+}
+
+func downloadOrder(key string, session string, parentDir string) {
+	apiPath := path.Join(orderPath, key)
+	resp, err := authGet(apiPath, session)
 	if err != nil {
-		log.Fatalf("error downloading order information %s: %v", u, err)
+		log.Fatalf("error downloading order information: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("error invalid status: %s", resp.Status)
+		log.Fatalf(" invalid http status for order information : %s", resp.Status)
 	}
 
 	defer resp.Body.Close()
@@ -125,7 +124,7 @@ func main() {
 	if name == "" {
 		name = order.Product.MachineName
 	}
-	*out = path.Join(*out, removeIllegalCharacters(name))
+	outputDir := path.Join(parentDir, removeIllegalCharacters(name))
 
 	_ = os.MkdirAll(*out, 0777)
 	log.Printf("Saving files into %s", *out)
@@ -168,7 +167,7 @@ func main() {
 						return
 					}
 
-					filepath := path.Join(*out, filename)
+					filepath := path.Join(outputDir, filename)
 					bookFile, err := os.Create(filepath)
 					if err != nil {
 						log.Printf("error creating book file (%s): %v", filepath, err)
@@ -181,46 +180,46 @@ func main() {
 						log.Printf("error copying response body to file (%s/%s): %v", *out, filename, err)
 						return
 					}
-					log.Printf("Finished saving file %s/%s", *out, filename)
-					os.Chtimes(fmt.Sprintf("%s/%s", *out, filename), bookLastmodTime, bookLastmodTime)
+					log.Printf("Finished saving file %s", filepath)
+					os.Chtimes(filepath, bookLastmodTime, bookLastmodTime)
 
 					// log.Printf("TZ=UTC touch -d \"%s\" \"%s/%s\"", strings.Replace(fmt.Sprintf("%s", bookLastmodTime), " UTC", "", 1), *out, filename)
 					// log.Printf("\t%-9d \"%s\"", resp.ContentLength, downloadURL)
 
 					if downloadType.SHA1 != "" {
-						f, err := os.Open(fmt.Sprintf("%s/%s", *out, filename))
+						f, err := os.Open(filepath)
 						if err != nil {
-							log.Printf("error reading file: %v for: %s/%s", err, *out, filename)
+							log.Printf("error reading file: %v for: %s", err, filepath)
 							return
 						}
 						defer f.Close()
 
 						hash := sha1.New()
 						if _, err := io.Copy(hash, f); err != nil {
-							log.Printf("error calculating sha1sum: %v for: %s/%s", err, *out, filename)
+							log.Printf("error calculating sha1sum: %v for: %s", err, filepath)
 						}
 						bs := hash.Sum(nil)
 						if downloadType.SHA1 != fmt.Sprintf("%x", bs) {
-							log.Printf("SHA1 checksum failed for %s -- expected %s but got %x", filename, downloadType.SHA1, bs)
+							log.Printf("SHA1 checksum failed for %s -- expected %s but got %x", filepath, downloadType.SHA1, bs)
 						} // else {
 						// 	log.Printf("SHA1 checksum is good for %s/%s -- %x", *out, filename, bs)
 						// }
 					}
 					if downloadType.MD5 != "" {
-						f, err := os.Open(fmt.Sprintf("%s/%s", *out, filename))
+						f, err := os.Open(filepath)
 						if err != nil {
-							log.Printf("error reading file: %v for: %s/%s", err, *out, filename)
+							log.Printf("error reading file: %v for: %s", err, filepath)
 							return
 						}
 						defer f.Close()
 
 						hash := md5.New()
 						if _, err := io.Copy(hash, f); err != nil {
-							log.Printf("error calculating md5sum: %v for: %s/%s", err, *out, filename)
+							log.Printf("error calculating md5sum: %v for: %s", err, filepath)
 						}
 						bs := hash.Sum(nil)
 						if downloadType.MD5 != fmt.Sprintf("%x", bs) {
-							log.Printf("MD5 checksum failed for %s -- expected %s but got %x", filename, downloadType.MD5, bs)
+							log.Printf("MD5 checksum failed for %s -- expected %s but got %x", filepath, downloadType.MD5, bs)
 						} // else {
 						// 	log.Printf("MD5 checksum is good for %s/%s -- %x", *out, filename, bs)
 						// }
@@ -231,4 +230,21 @@ func main() {
 		}
 	}
 	group.Wait()
+}
+
+func main() {
+	flags.Parse(os.Args[1:])
+	if *gameKey == "" {
+		log.Fatal("Missing key")
+	}
+
+	if *sessCookie == "" {
+		log.Fatal("Missing _simpleauth_sess auth cookie")
+	}
+
+	log.SetFlags(0)
+	log.SetOutput(new(logger))
+
+	downloadOrder(*gameKey, *sessCookie, *out)
+
 }
