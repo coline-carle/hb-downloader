@@ -1,13 +1,9 @@
 package main
 
 import (
-	"crypto/md5"
-	"crypto/sha1"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"hash"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -15,7 +11,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"sync"
 )
 
 const (
@@ -111,31 +106,6 @@ func authGet(apiPath string, session string) (*http.Response, error) {
 	return client.Do(req)
 }
 
-func isValidChecksum(downloadType humbleDownloadType, filepath string) bool {
-	f, err := os.Open(filepath)
-	if err != nil {
-		log.Printf("error reading file: %v for: %s", err, filepath)
-	}
-	defer f.Close()
-	var h hash.Hash
-	if downloadType.SHA1 != "" {
-		h = sha1.New()
-	} else {
-		h = md5.New()
-	}
-
-	if _, err := io.Copy(h, f); err != nil {
-		log.Printf("error calculating sha1sum: %v for: %s", err, filepath)
-	}
-	bs := h.Sum(nil)
-	bsString := fmt.Sprintf("%x", bs)
-	if downloadType.SHA1 != "" {
-		return downloadType.SHA1 == bsString
-	}
-	return downloadType.MD5 == bsString
-
-}
-
 func getOrderList(session string) []string {
 	resp, err := authGet(userOrdersPath, session)
 	if err != nil {
@@ -187,75 +157,25 @@ func downloadOrder(key string, session string, parentDir string) {
 	}
 	log.Printf("downloading order '%s' into '%s'", name, outputDir)
 
-	// Download all files from order
-	var group sync.WaitGroup
 	// 1 - Iterate through all products
+	tasks := []*Task{}
 	for i := 0; i < len(order.Products); i++ {
 		prod := order.Products[i]
 		// 2 - Iterate through the product downloads, currently only returns ebook platform download
+
 		for j := 0; j < len(prod.Downloads); j++ {
 			download := prod.Downloads[j]
 			// 3 - Iterate through download types (PDF,EPUB,MOBI)
 			for x := 0; x < len(download.DownloadTypes); x++ {
 				downloadType := download.DownloadTypes[x]
-				group.Add(1)
-				go func(filename, downloadURL string) {
+				filename := fmt.Sprintf("%s.%s", prod.HumanName, strings.ToLower(strings.TrimPrefix(downloadType.Name, ".")))
 
-					defer group.Done()
-
-					//cleanup names
-					filename = removeIllegalCharacters(filename)
-					filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
-					filename = strings.Replace(filename, ".download", "_video.zip", 1)
-
-					filepath := path.Join(outputDir, filename)
-
-					// if the file exist and the checksum is good don't download the file
-					_, err := os.Stat(filepath)
-					if err == nil && isValidChecksum(downloadType, filepath) {
-						log.Printf("%s already downloaded, skipping", filepath)
-					}
-					resp, err := http.Get(downloadURL)
-					if err != nil {
-						log.Printf("error downloading file %s", downloadURL)
-						return
-					}
-					defer resp.Body.Close()
-					bookLastmod := resp.Header.Get("Last-Modified")
-					bookLastmodTime, err := http.ParseTime(bookLastmod)
-					if err != nil {
-						log.Printf("error reading Last-Modified header data: %v", err)
-						return
-					}
-
-					if resp.StatusCode < 200 || resp.StatusCode > 299 {
-						log.Printf("error status code %d", resp.StatusCode)
-						return
-					}
-
-					bookFile, err := os.Create(filepath)
-					if err != nil {
-						log.Printf("error creating book file (%s): %v", filepath, err)
-						return
-					}
-					defer bookFile.Close()
-					_, err = io.Copy(bookFile, resp.Body)
-					if err != nil {
-						log.Printf("error copying response body to file '%s': '%v'", filepath, err)
-						return
-					}
-					log.Printf("Finished saving file %s", filepath)
-					os.Chtimes(filepath, bookLastmodTime, bookLastmodTime)
-
-					if !isValidChecksum(downloadType, filepath) {
-						log.Printf("invalid checksum for file: %s", filepath)
-					}
-
-				}(fmt.Sprintf("%s.%s", prod.HumanName, strings.ToLower(strings.TrimPrefix(downloadType.Name, "."))), downloadType.URL.Web)
+				tasks = append(tasks, NewTask(func() error { return syncFile(outputDir, filename, downloadType.URL.Web, downloadType) }))
 			}
 		}
 	}
-	group.Wait()
+	p := NewPool(tasks, 4)
+	p.Run()
 }
 
 func main() {
