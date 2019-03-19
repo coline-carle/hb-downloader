@@ -183,8 +183,6 @@ func downloadOrder(key string, session string, parentDir string) {
 	}
 	p := NewPool(tasks, 4)
 	p.Run()
-
-	log.Print("checking errors")
 	var numErrors int
 	for _, task := range p.Tasks {
 		if task.Err != nil {
