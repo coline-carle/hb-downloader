@@ -25,7 +25,7 @@ var (
 	sessCookie = flags.String("auth", "", "Account _simpleauth_sess cookie")
 	out        = flags.String("out", "", "out: /path/to/save/books")
 	all        = flags.Bool("all", false, "download all purshases")
-	filter     = flags.String("filter", "", "filter downloads by extension ex: mobi")
+	platform   = flags.String("platform", "", "filter by platfrom ex: ebook")
 )
 
 type humbleBundleOrderKey struct {
@@ -167,8 +167,15 @@ func downloadOrder(key string, session string, parentDir string) {
 			download := prod.Downloads[j]
 			// 3 - Iterate through download types (PDF,EPUB,MOBI)
 			for x := 0; x < len(download.DownloadTypes); x++ {
+				if *platform != "" && *platform != download.Platform {
+					continue
+				}
 				downloadType := download.DownloadTypes[x]
 				filename := fmt.Sprintf("%s.%s", prod.HumanName, strings.ToLower(strings.TrimPrefix(downloadType.Name, ".")))
+				// cleanup filename
+				filename = removeIllegalCharacters(filename)
+				filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
+				filename = strings.Replace(filename, ".download", "_video.zip", 1)
 
 				tasks = append(tasks, NewTask(func() error { return syncFile(outputDir, filename, downloadType.URL.Web, downloadType) }))
 			}
@@ -176,6 +183,19 @@ func downloadOrder(key string, session string, parentDir string) {
 	}
 	p := NewPool(tasks, 4)
 	p.Run()
+
+	log.Print("checking errors")
+	var numErrors int
+	for _, task := range p.Tasks {
+		if task.Err != nil {
+			log.Print(task.Err)
+			numErrors++
+		}
+		if numErrors >= 10 {
+			log.Print("Too many errors.")
+			break
+		}
+	}
 }
 
 func main() {

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"strings"
+	"regexp"
 )
 
 func isValidChecksum(downloadType humbleDownloadType, filepath string) bool {
@@ -39,24 +39,31 @@ func isValidChecksum(downloadType humbleDownloadType, filepath string) bool {
 }
 
 func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownloadType) error {
-
-	//cleanup names
-	filename = removeIllegalCharacters(filename)
-	filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
-	filename = strings.Replace(filename, ".download", "_video.zip", 1)
-
-	filepath := path.Join(outputDir, filename)
-
-	// if the file exist and the checksum is good don't download the file
-	_, err := os.Stat(filepath)
-	if err == nil && isValidChecksum(downloadType, filepath) {
-		return fmt.Errorf("%s already downloaded, skipping", filepath)
-	}
 	resp, err := http.Get(downloadURL)
 	if err != nil {
 		return fmt.Errorf("error downloading file %s", downloadURL)
 	}
 	defer resp.Body.Close()
+
+	// if content disposition exists used it to name the file
+	contentDisposition := resp.Header.Get("Content-Disposition")
+	if contentDisposition != "" {
+		re := regexp.MustCompile(`filename="(.*)"`)
+		matches := re.FindStringSubmatch(contentDisposition)
+		if len(matches) == 1 {
+			filename = matches[0]
+		}
+	}
+
+	filepath := path.Join(outputDir, filename)
+
+	// if the file exist and the checksum is good don't download the file
+	_, err = os.Stat(filepath)
+	if err == nil && isValidChecksum(downloadType, filepath) {
+		log.Printf("%s already downloaded, skipping\n", filepath)
+		return nil
+	}
+
 	bookLastmod := resp.Header.Get("Last-Modified")
 	bookLastmodTime, err := http.ParseTime(bookLastmod)
 	if err != nil {
