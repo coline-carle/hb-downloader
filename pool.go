@@ -1,6 +1,10 @@
 package main
 
-import "sync"
+import (
+	"sync"
+
+	"gopkg.in/cheggaaa/pb.v1"
+)
 
 // Pool is a worker group that runs a number of tasks at a
 // configured concurrency.
@@ -10,6 +14,7 @@ type Pool struct {
 	concurrency int
 	tasksChan   chan *Task
 	wg          sync.WaitGroup
+	bar         *pb.ProgressBar
 }
 
 // NewPool initializes a new pool with the given tasks and
@@ -19,6 +24,7 @@ func NewPool(tasks []*Task, concurrency int) *Pool {
 		Tasks:       tasks,
 		concurrency: concurrency,
 		tasksChan:   make(chan *Task),
+		bar:         pb.New(len(tasks)),
 	}
 }
 
@@ -26,12 +32,14 @@ func NewPool(tasks []*Task, concurrency int) *Pool {
 func (p *Pool) work() {
 	for task := range p.tasksChan {
 		task.Run(&p.wg)
+		p.bar.Increment()
 	}
 }
 
 // Run runs all work within the pool and blocks until it's
 // finished.
 func (p *Pool) Run() {
+	p.bar.Start()
 	for i := 0; i < p.concurrency; i++ {
 		go p.work()
 	}
@@ -45,6 +53,7 @@ func (p *Pool) Run() {
 	close(p.tasksChan)
 
 	p.wg.Wait()
+	p.bar.Finish()
 }
 
 // Task encapsulates a work item that should go in a work
