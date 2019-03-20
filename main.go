@@ -128,34 +128,34 @@ func getOrderList(session string) []string {
 	return keys
 }
 
-func downloadOrder(key string, session string, parentDir string) {
+func fetchOrder(key string, session string) (humbleBundleOrder, error) {
+	order := humbleBundleOrder{}
 	apiPath := path.Join(orderPath, key)
 	resp, err := authGet(apiPath, session)
 	if err != nil {
-		log.Fatalf("error downloading order information: %v", err)
+		return order, fmt.Errorf("error downloading order information: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf(" invalid http status for order information : %s", resp.Status)
+		return order, fmt.Errorf("got invalid http status downloading order information : %s", resp.Status)
 	}
 
 	defer resp.Body.Close()
 	buf, err := ioutil.ReadAll(resp.Body)
-	order := &humbleBundleOrder{}
-	err = json.Unmarshal(buf, order)
 	if err != nil {
-		log.Fatalf("error unmarshaling order: %v", err)
+		return order, err
 	}
+	err = json.Unmarshal(buf, &order)
+	return order, err
+}
+
+func downloadOrder(order humbleBundleOrder, parentDir string) {
+
 	name := order.Product.HumanName
 	if name == "" {
 		name = order.Product.MachineName
 	}
-	outputDir := path.Join(parentDir, removeIllegalCharacters(name))
 
-	err = os.MkdirAll(outputDir, 0777)
-	if err != nil {
-		log.Fatalf("error creating parent directory '%s' for the bundle '%s'", parentDir, name)
-	}
-	log.Printf("downloading order '%s' into '%s'", name, outputDir)
+	outputDir := path.Join(parentDir, removeIllegalCharacters(name))
 
 	// 1 - Iterate through all products
 	tasks := []*Task{}
@@ -181,6 +181,11 @@ func downloadOrder(key string, session string, parentDir string) {
 			}
 		}
 	}
+	if len(tasks) == 0 {
+		return
+	}
+
+	fmt.Printf("start downloading order '%s'\n", name)
 	p := NewPool(tasks, 4)
 	p.Run()
 	var numErrors int
@@ -203,19 +208,32 @@ func main() {
 	log.SetOutput(new(logger))
 
 	if *sessCookie == "" {
-		log.Fatal("Missing _simpleauth_sess auth cookie")
+		log.Println("Missing _simpleauth_sess auth cookie")
+		flag.Usage()
+		os.Exit(-1)
 	}
 
 	if *all == true {
 		keys := getOrderList(*sessCookie)
 		for _, key := range keys {
-			downloadOrder(key, *sessCookie, *out)
+			order, err := fetchOrder(key, *sessCookie)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			downloadOrder(order, *out)
 		}
 		os.Exit(0)
 	}
 	if *gameKey == "" {
-		log.Fatal("Missing key")
+		log.Println("Missing key")
+		flag.Usage()
 	}
-	downloadOrder(*gameKey, *sessCookie, *out)
+	order, err := fetchOrder(*gameKey, *sessCookie)
+	if err != nil {
+		log.Println(err)
+		os.Exit(-1)
+	}
+	downloadOrder(order, *out)
 
 }

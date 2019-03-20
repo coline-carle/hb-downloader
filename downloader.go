@@ -60,7 +60,7 @@ func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownlo
 	// if the file exist and the checksum is good don't download the file
 	_, err = os.Stat(filepath)
 	if err == nil && isValidChecksum(downloadType, filepath) {
-		log.Printf("skipping already downloaded file: '%s'\n", filename)
+		// fmt.Printf("skipping already downloaded file: '%s'\n", filename)
 		return nil
 	}
 
@@ -74,17 +74,23 @@ func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownlo
 		return fmt.Errorf("error status code %d", resp.StatusCode)
 	}
 
+	// create parent directory if needed
+	err = os.MkdirAll(outputDir, 0777)
+	if err != nil {
+		log.Fatalf("error creating order directory '%s'", outputDir)
+	}
+
 	bookFile, err := os.Create(filepath)
 	if err != nil {
 		return fmt.Errorf("error creating book file (%s): %v", filepath, err)
 	}
 	defer bookFile.Close()
-	log.Printf("starting download: '%s'\n", filename)
+	// fmt.Printf("starting download: '%s'\n", filename)
 	_, err = io.Copy(bookFile, resp.Body)
 	if err != nil {
 		return fmt.Errorf("error copying response body to file '%s': '%v'", filepath, err)
 	}
-	log.Printf("Finished saving file %s", filepath)
+	// fmt.Printf("Finished saving file %s", filepath)
 	os.Chtimes(filepath, bookLastmodTime, bookLastmodTime)
 
 	if !isValidChecksum(downloadType, filepath) {
