@@ -20,12 +20,11 @@ const (
 )
 
 var (
-	flags      = flag.NewFlagSet("humblebundle", flag.ExitOnError)
-	gameKey    = flags.String("key", "", "key: Key listed in the URL params in the downloads page")
-	sessCookie = flags.String("auth", "", "Account _simpleauth_sess cookie")
-	out        = flags.String("out", "", "out: /path/to/save/books")
-	all        = flags.Bool("all", false, "download all purshases")
-	platform   = flags.String("platform", "", "filter by platfrom ex: ebook")
+	gameKey    = flag.String("key", "", "key: Key listed in the URL params in the downloads page")
+	sessCookie = flag.String("auth", "", "Account _simpleauth_sess cookie")
+	out        = flag.String("out", "", "out: /path/to/save/books")
+	all        = flag.Bool("all", false, "download all purshases")
+	platform   = flag.String("platform", "", "filter by platform ex: ebook")
 )
 
 type humbleBundleOrderKey struct {
@@ -202,7 +201,7 @@ func downloadOrder(order humbleBundleOrder, parentDir string) {
 }
 
 func main() {
-	flags.Parse(os.Args[1:])
+	flag.Parse()
 
 	log.SetFlags(0)
 	log.SetOutput(new(logger))
