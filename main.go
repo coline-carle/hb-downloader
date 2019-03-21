@@ -75,8 +75,8 @@ func (writer logger) Write(bytes []byte) (int, error) {
 
 func removeIllegalCharacters(filename string) string {
 	filename = strings.Replace(filename, "/", "_", -1)
-	filename = strings.Replace(filename, ":", ";", -1)
-	filename = strings.Replace(filename, "!", "l", -1)
+	filename = strings.Replace(filename, ":", " ", -1)
+	filename = strings.Replace(filename, "!", " ", -1)
 	return filename
 }
 
@@ -147,7 +147,7 @@ func fetchOrder(key string, session string) (humbleBundleOrder, error) {
 	return order, err
 }
 
-func downloadOrder(order humbleBundleOrder, parentDir string) {
+func downloadOrder(order humbleBundleOrder, parentDir string) error {
 
 	name := order.Product.HumanName
 	if name == "" {
@@ -158,30 +158,22 @@ func downloadOrder(order humbleBundleOrder, parentDir string) {
 
 	// 1 - Iterate through all products
 	tasks := []*Task{}
-	for i := 0; i < len(order.Products); i++ {
-		prod := order.Products[i]
-		// 2 - Iterate through the product downloads, currently only returns ebook platform download
-
-		for j := 0; j < len(prod.Downloads); j++ {
-			download := prod.Downloads[j]
+	for _, product := range order.Products {
+		for _, download := range product.Downloads {
+			if *platform != "" && *platform != download.Platform {
+				continue
+			}
 			// 3 - Iterate through download types (PDF,EPUB,MOBI)
-			for x := 0; x < len(download.DownloadTypes); x++ {
-				if *platform != "" && *platform != download.Platform {
-					continue
-				}
-				downloadType := download.DownloadTypes[x]
-				filename := fmt.Sprintf("%s.%s", prod.HumanName, strings.ToLower(strings.TrimPrefix(downloadType.Name, ".")))
-				// cleanup filename
-				filename = removeIllegalCharacters(filename)
-				filename = strings.Replace(filename, ".supplement", "_supplement.zip", 1)
-				filename = strings.Replace(filename, ".download", "_video.zip", 1)
-
-				tasks = append(tasks, NewTask(func() error { return syncFile(outputDir, filename, downloadType.URL.Web, downloadType) }))
+			for _, downloadType := range download.DownloadTypes {
+				// copy parameters for the closure
+				name := product.HumanName
+				downloadType := downloadType
+				tasks = append(tasks, NewTask(func() error { return syncFile(outputDir, name, downloadType) }))
 			}
 		}
 	}
 	if len(tasks) == 0 {
-		return
+		return nil
 	}
 
 	fmt.Printf("start downloading order '%s'\n", name)
@@ -198,6 +190,42 @@ func downloadOrder(order humbleBundleOrder, parentDir string) {
 			break
 		}
 	}
+	if numErrors > 0 {
+		return fmt.Errorf("order download failed")
+	}
+	return nil
+}
+
+func downloadAll(cookie, outputDir string) error {
+	fmt.Println("downloading the list of orders...")
+	keys := getOrderList(*sessCookie)
+	orders := make([]humbleBundleOrder, 0, len(keys))
+	for _, key := range keys {
+		order, err := fetchOrder(key, cookie)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("downloaded file list for order '%s'\n", order.Product.HumanName)
+		orders = append(orders, order)
+
+	}
+	var lastError error
+	for _, order := range orders {
+		err := downloadOrder(order, outputDir)
+		if err != nil {
+			lastError = err
+		}
+	}
+	return lastError
+}
+
+func downloadOrderWithKey(key, cookie, outputDir string) error {
+	order, err := fetchOrder(key, cookie)
+	if err != nil {
+		return err
+	}
+	downloadOrder(order, outputDir)
+	return nil
 }
 
 func main() {
@@ -212,27 +240,20 @@ func main() {
 		os.Exit(-1)
 	}
 
+	var err error
+
 	if *all == true {
-		keys := getOrderList(*sessCookie)
-		for _, key := range keys {
-			order, err := fetchOrder(key, *sessCookie)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			downloadOrder(order, *out)
+		err = downloadAll(*sessCookie, *out)
+	} else {
+		if *gameKey == "" {
+			log.Println("Missing key")
+			flag.Usage()
 		}
-		os.Exit(0)
+		err = downloadOrderWithKey(*gameKey, *sessCookie, *out)
 	}
-	if *gameKey == "" {
-		log.Println("Missing key")
-		flag.Usage()
-	}
-	order, err := fetchOrder(*gameKey, *sessCookie)
+
 	if err != nil {
 		log.Println(err)
 		os.Exit(-1)
 	}
-	downloadOrder(order, *out)
-
 }

@@ -10,6 +10,12 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strings"
+)
+
+var (
+	errInvalidContentDispositionHeader  = fmt.Errorf("Invalid Content-Dispostion Header")
+	errContentDispositionHeaderNotFound = fmt.Errorf("Content-Dispostion Header not found")
 )
 
 func isValidChecksum(downloadType humbleDownloadType, filepath string) (bool, error) {
@@ -39,21 +45,46 @@ func isValidChecksum(downloadType humbleDownloadType, filepath string) (bool, er
 
 }
 
-func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownloadType) error {
-	resp, err := http.Get(downloadURL)
+func filenameFromHeader(header http.Header) (filename string, err error) {
+	contentDisposition := header.Get("Content-Disposition")
+	if contentDisposition != "" {
+		re := regexp.MustCompile(`filename="(.+)"`)
+		matches := re.FindStringSubmatch(contentDisposition)
+		if len(matches) == 1 {
+			return removeIllegalCharacters(matches[0]), nil
+		}
+		return "", errInvalidContentDispositionHeader
+	}
+	return "", errContentDispositionHeaderNotFound
+}
+
+func filenameFromAPI(humanName, downloadName string) (filename string) {
+	filename = fmt.Sprintf("%s.%s", humanName, strings.ToLower(strings.TrimPrefix(downloadName, ".")))
+	filename = removeIllegalCharacters(filename)
+	return filename
+}
+
+func fixLastModified(filepath string, header http.Header) error {
+	lastMod := header.Get("Last-Modified")
+	lastModTime, err := http.ParseTime(lastMod)
 	if err != nil {
-		return fmt.Errorf("error downloading file %s", downloadURL)
+		return fmt.Errorf("error reading Last-Modified header data: %v", err)
+	}
+	os.Chtimes(filepath, lastModTime, lastModTime)
+	return nil
+}
+
+func syncFile(outputDir string, humanName string, downloadType humbleDownloadType) error {
+	resp, err := http.Get(downloadType.URL.Web)
+	if err != nil {
+		return fmt.Errorf("error downloading file %s", downloadType.URL.Web)
 	}
 	defer resp.Body.Close()
 
-	// if content disposition exists used it to name the file
-	contentDisposition := resp.Header.Get("Content-Disposition")
-	if contentDisposition != "" {
-		re := regexp.MustCompile(`filename="(.*)"`)
-		matches := re.FindStringSubmatch(contentDisposition)
-		if len(matches) == 1 {
-			filename = matches[0]
-		}
+	var filename string
+	filename, err = filenameFromHeader(resp.Header)
+	if err != nil {
+		filename = filenameFromAPI(humanName, downloadType.Name)
 	}
 
 	filepath := path.Join(outputDir, filename)
@@ -68,12 +99,6 @@ func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownlo
 		if ok {
 			return nil
 		}
-	}
-
-	bookLastmod := resp.Header.Get("Last-Modified")
-	bookLastmodTime, err := http.ParseTime(bookLastmod)
-	if err != nil {
-		return fmt.Errorf("error reading Last-Modified header data: %v", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -95,7 +120,6 @@ func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownlo
 	if err != nil {
 		return fmt.Errorf("error copying response body to file '%s': '%v'", filepath, err)
 	}
-	os.Chtimes(filepath, bookLastmodTime, bookLastmodTime)
 
 	ok, err := isValidChecksum(downloadType, filepath)
 	if err != nil {
@@ -104,5 +128,11 @@ func syncFile(outputDir, filename, downloadURL string, downloadType humbleDownlo
 	if !ok {
 		return fmt.Errorf("invalid checksum for file: %s", filepath)
 	}
+
+	err = fixLastModified(filepath, resp.Header)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
