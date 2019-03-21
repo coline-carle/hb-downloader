@@ -1,7 +1,7 @@
 # Humble Bundle File Downloader
 
 
-Forked from: https://github.com/diogogmt/humblebundle-downloader for my own need: download all the ebook I own on humblebundle
+Forked from: https://github.com/diogogmt/humblebundle-downloader for my own need: download all the ebooks I own on humblebundle
 
 
 ## Usage
