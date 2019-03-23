@@ -13,6 +13,8 @@ I download all the ebooks I own and being able to:
 
 the auth http only cookie is needed for authentification and can be extracted from developer console
 
+note: a subfolder is created for each bundle
+
 
 ```shell
 Usage: hb-downloader
