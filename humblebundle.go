@@ -59,6 +59,7 @@ type humbleBundleOrder struct {
 		} `json:"downloads"`
 	} `json:"subproducts"`
 }
+
 type HumbleBundleAPI struct {
 	sessCookie string
 }
