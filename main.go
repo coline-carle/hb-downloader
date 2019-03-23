@@ -20,11 +20,13 @@ const (
 )
 
 var (
-	gameKey    = flag.String("key", "", "key: Key listed in the URL params in the downloads page")
-	sessCookie = flag.String("auth", "", "Account _simpleauth_sess cookie")
-	out        = flag.String("out", "", "out: /path/to/save/books")
-	all        = flag.Bool("all", false, "download all purshases")
-	platform   = flag.String("platform", "", "filter by platform ex: ebook")
+	gameKey       = flag.String("key", "", "key: Key listed in the URL params in the downloads page")
+	sessCookie    = flag.String("auth", "", "Account _simpleauth_sess cookie")
+	out           = flag.String("out", "", "out: /path/to/save/books")
+	all           = flag.Bool("all", false, "download all purshases")
+	platform      = flag.String("platform", "", "filter by platform ex: ebook")
+	excludeFormat = flag.String("exclude", "", "exclude a format from the downloads. ex: mobi")
+	onlyFormat    = flag.String("only", "", "only download a certain format. ex: cbz")
 )
 
 type humbleBundleOrderKey struct {
@@ -41,6 +43,10 @@ type humbleDownloadType struct {
 	HumanSize string `json:"human_size"`
 	FileSize  int64  `json:"file_size"`
 	MD5       string `json:"md5"`
+}
+
+func (hdt *humbleDownloadType) fileExtension() string {
+	return strings.ToLower(strings.TrimPrefix(hdt.Name, "."))
 }
 
 type humbleBundleOrder struct {
@@ -71,13 +77,6 @@ type logger struct {
 
 func (writer logger) Write(bytes []byte) (int, error) {
 	return fmt.Print(string(bytes))
-}
-
-func removeIllegalCharacters(filename string) string {
-	filename = strings.Replace(filename, "/", "_", -1)
-	filename = strings.Replace(filename, ":", " ", -1)
-	filename = strings.Replace(filename, "!", " ", -1)
-	return filename
 }
 
 func authGet(apiPath string, session string) (*http.Response, error) {
@@ -147,7 +146,7 @@ func fetchOrder(key string, session string) (humbleBundleOrder, error) {
 	return order, err
 }
 
-func downloadOrder(order humbleBundleOrder, parentDir string) error {
+func downloadOrder(order humbleBundleOrder, parentDir, only, exclude string) error {
 
 	name := order.Product.HumanName
 	if name == "" {
@@ -165,10 +164,14 @@ func downloadOrder(order humbleBundleOrder, parentDir string) error {
 			}
 			// 3 - Iterate through download types (PDF,EPUB,MOBI)
 			for _, downloadType := range download.DownloadTypes {
-				// copy parameters for the closure
-				name := product.HumanName
-				downloadType := downloadType
-				tasks = append(tasks, NewTask(func() error { return syncFile(outputDir, name, downloadType) }))
+				if exclude != "" && downloadType.fileExtension() == exclude {
+					continue
+				}
+				if only != "" && downloadType.fileExtension() != only {
+					continue
+				}
+				fd := NewFileDownloader(downloadType, outputDir, product.HumanName)
+				tasks = append(tasks, NewTask(func() error { return fd.Download() }))
 			}
 		}
 	}
@@ -196,7 +199,7 @@ func downloadOrder(order humbleBundleOrder, parentDir string) error {
 	return nil
 }
 
-func downloadAll(cookie, outputDir string) error {
+func downloadAll(cookie, outputDir, only, exclude string) error {
 	fmt.Println("downloading the list of orders...")
 	keys := getOrderList(*sessCookie)
 	orders := make([]humbleBundleOrder, 0, len(keys))
@@ -211,7 +214,7 @@ func downloadAll(cookie, outputDir string) error {
 	}
 	var lastError error
 	for _, order := range orders {
-		err := downloadOrder(order, outputDir)
+		err := downloadOrder(order, outputDir, only, exclude)
 		if err != nil {
 			lastError = err
 		}
@@ -219,12 +222,12 @@ func downloadAll(cookie, outputDir string) error {
 	return lastError
 }
 
-func downloadOrderWithKey(key, cookie, outputDir string) error {
+func downloadOrderWithKey(key, cookie, outputDir, only, exclude string) error {
 	order, err := fetchOrder(key, cookie)
 	if err != nil {
 		return err
 	}
-	downloadOrder(order, outputDir)
+	downloadOrder(order, outputDir, only, exclude)
 	return nil
 }
 
@@ -242,14 +245,18 @@ func main() {
 
 	var err error
 
+	// cleanup only/exclude formats
+	only := strings.ToLower(*onlyFormat)
+	exclude := strings.ToLower(*excludeFormat)
+
 	if *all == true {
-		err = downloadAll(*sessCookie, *out)
+		err = downloadAll(*sessCookie, *out, only, exclude)
 	} else {
 		if *gameKey == "" {
 			log.Println("Missing key")
 			flag.Usage()
 		}
-		err = downloadOrderWithKey(*gameKey, *sessCookie, *out)
+		err = downloadOrderWithKey(*gameKey, *sessCookie, *out, only, exclude)
 	}
 
 	if err != nil {
