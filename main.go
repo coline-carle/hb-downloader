@@ -19,35 +19,62 @@ var (
 	excludeFormat = flag.String("exclude", "", "exclude a format from the downloads. ex: mobi")
 	onlyFormat    = flag.String("only", "", "only download a certain format. ex: cbz")
 	ifOnly        = flag.Bool("ifonly", false, "'only' flag will be used on the condition the precised format is available for a given download")
+	list          = flag.Bool("list", false, "list the bundles")
 )
 
-func downloadAll(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownloader) error {
-	fmt.Println("downloading orders details...")
+func getBundlesDetails(hbAPI *HumbleBundleAPI) (order []humbleBundleOrder, err error) {
+	fmt.Println("downloading bundles details...")
 
 	keys, err := hbAPI.GetOrders()
 	if err != nil {
-		return err
+		return nil, err
 	}
+	var lastError error
+
 	orders := make([]humbleBundleOrder, 0, len(keys))
 	progressbar := pb.New(len(keys))
 	progressbar.Start()
 	for _, key := range keys {
 		order, err := hbAPI.GetOrder(key)
 		if err != nil {
-			return err
+			lastError = err
 		}
 		orders = append(orders, order)
 		progressbar.Increment()
 
 	}
 	progressbar.Finish()
+	return orders, lastError
+}
 
+func downloadAllBundles(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownloader) error {
 	var lastError error
-	for _, order := range orders {
-		err := bundleDownloader.Download(order)
+	bundles, err := getBundlesDetails(hbAPI)
+	if err != nil {
+		lastError = err
+	}
+
+	for _, bundle := range bundles {
+		err := bundleDownloader.Download(bundle)
 		if err != nil {
 			lastError = err
 		}
+	}
+	return lastError
+}
+
+func printBundleTitle(bundle humbleBundleOrder) {
+	fmt.Printf("%s [%s]\n", bundle.Product.HumanName, bundle.GameKey)
+}
+
+func listBundles(hbAPI *HumbleBundleAPI) error {
+	var lastError error
+	bundles, err := getBundlesDetails(hbAPI)
+	if err != nil {
+		lastError = err
+	}
+	for _, bundle := range bundles {
+		printBundleTitle(bundle)
 	}
 	return lastError
 }
@@ -83,9 +110,12 @@ func main() {
 
 	var err error
 
-	if *all == true {
-		err = downloadAll(hbAPI, bundleDownloader)
-	} else {
+	switch {
+	case *list:
+		err = listBundles(hbAPI)
+	case *all:
+		err = downloadAllBundles(hbAPI, bundleDownloader)
+	default:
 		if *gameKey == "" {
 			log.Println("Missing key")
 			flag.Usage()
