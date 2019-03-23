@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -22,8 +23,46 @@ var (
 	list          = flag.Bool("list", false, "list the bundles")
 )
 
+func startDownload(title string, downloads []*FileDownloader) error {
+	fmt.Printf("Downloading '%s'...\n", title)
+	return download(downloads)
+}
+
+func download(downloads []*FileDownloader) error {
+
+	if len(downloads) == 0 {
+		return nil
+	}
+
+	tasks := make([]*Task, len(downloads), len(downloads))
+	for i, downloader := range downloads {
+		tasks[i] = NewTask(func() error { return downloader.Download() })
+	}
+
+	p := NewPool(tasks, 4)
+	p.Run()
+
+	// process errors
+	var numErrors int
+	for _, task := range p.Tasks {
+		if task.Err != nil {
+			log.Print(task.Err)
+			numErrors++
+		}
+		if numErrors >= 10 {
+			log.Print("Too many errors.")
+			break
+		}
+	}
+	if numErrors > 0 {
+		return fmt.Errorf("at least %d download(s) have failed", numErrors)
+	}
+
+	return nil
+}
+
 func getBundlesDetails(hbAPI *HumbleBundleAPI) (order []humbleBundleOrder, err error) {
-	fmt.Println("downloading bundles details...")
+	fmt.Println("Downloading bundles details...")
 
 	keys, err := hbAPI.GetOrders()
 	if err != nil {
@@ -51,16 +90,20 @@ func downloadAllBundles(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownload
 	var lastError error
 	bundles, err := getBundlesDetails(hbAPI)
 	if err != nil {
-		lastError = err
+		return err
 	}
 
 	for _, bundle := range bundles {
-		err := bundleDownloader.Download(bundle)
+		downloads := bundleDownloader.Downloads(bundle)
+		err = startDownload(bundle.Product.HumanName, downloads)
 		if err != nil {
 			lastError = err
 		}
 	}
-	return lastError
+	if lastError != nil {
+		return errors.New("at least one have download failed")
+	}
+	return nil
 }
 
 func printBundleTitle(bundle humbleBundleOrder) {
@@ -68,25 +111,23 @@ func printBundleTitle(bundle humbleBundleOrder) {
 }
 
 func listBundles(hbAPI *HumbleBundleAPI) error {
-	var lastError error
 	bundles, err := getBundlesDetails(hbAPI)
 	if err != nil {
-		lastError = err
+		return err
 	}
 	for _, bundle := range bundles {
 		printBundleTitle(bundle)
 	}
-	return lastError
+	return nil
 }
 
-func downloadOrder(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownloader, key string) error {
-
-	order, err := hbAPI.GetOrder(key)
+func downloadBundle(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownloader, key string) error {
+	bundle, err := hbAPI.GetOrder(key)
 	if err != nil {
 		return err
 	}
-	bundleDownloader.Download(order)
-	return nil
+	downloads := bundleDownloader.Downloads(bundle)
+	return startDownload(bundle.Product.HumanName, downloads)
 }
 
 func main() {
@@ -120,7 +161,7 @@ func main() {
 			log.Println("Missing key")
 			flag.Usage()
 		}
-		err = downloadOrder(hbAPI, bundleDownloader, *gameKey)
+		err = downloadBundle(hbAPI, bundleDownloader, *gameKey)
 	}
 
 	if err != nil {

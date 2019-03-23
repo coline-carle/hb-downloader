@@ -49,8 +49,7 @@ func (bd *BundleDownloader) SetExcludeFormatFilter(exclude string) {
 	bd.exclude = exclude
 }
 
-func (bd *BundleDownloader) Download(order humbleBundleOrder) error {
-
+func (bd *BundleDownloader) Downloads(order humbleBundleOrder) []*FileDownloader {
 	name := order.Product.HumanName
 	if name == "" {
 		name = order.Product.MachineName
@@ -58,15 +57,16 @@ func (bd *BundleDownloader) Download(order humbleBundleOrder) error {
 
 	outputDir := path.Join(bd.parentDir, removeIllegalCharacters(name))
 
-	// 1 - Iterate through all products
-	tasks := []*Task{}
+	bundleDownloads := []*FileDownloader{}
+
+	// Iterate through all products
 	for _, product := range order.Products {
 		for _, download := range product.Downloads {
 			if *platform != "" && *platform != download.Platform {
 				continue
 			}
-			// 3 - Iterate through download types (PDF,EPUB,MOBI)
-			fileDownloads := make([]*FileDownloader, 0, len(download.DownloadTypes))
+			// Iterate through download types (PDF,EPUB,MOBI)
+			productDownloads := make([]*FileDownloader, 0, len(download.DownloadTypes))
 			onlyPresent := false
 			for _, DownloadType := range download.DownloadTypes {
 				if bd.exclude != "" && DownloadType.fileExtension() == bd.exclude {
@@ -82,49 +82,28 @@ func (bd *BundleDownloader) Download(order humbleBundleOrder) error {
 					onlyPresent = true
 				}
 				fd := NewFileDownloader(DownloadType, outputDir, product.HumanName)
-				fileDownloads = append(fileDownloads, fd)
+				productDownloads = append(productDownloads, fd)
 
 			}
 
 			// ifOnly is set, the format is present: filter the results
 			if bd.ifOnly && onlyPresent && bd.only != "" {
-				filteredDownloads := make([]*FileDownloader, 0, len(fileDownloads))
-				for _, fileDownload := range fileDownloads {
+				filteredDownloads := make([]*FileDownloader, 0, len(productDownloads))
+				for _, fileDownload := range productDownloads {
 					if fileDownload.DownloadType.fileExtension() == bd.only {
 						filteredDownloads = append(filteredDownloads, fileDownload)
 					}
 				}
-				fileDownloads = filteredDownloads
+				productDownloads = filteredDownloads
 			}
 
-			for _, downloader := range fileDownloads {
-				tasks = append(tasks, NewTask(func() error { return downloader.Download() }))
+			for _, downloader := range productDownloads {
+				bundleDownloads = append(bundleDownloads, downloader)
 			}
 
 		}
 	}
-	if len(tasks) == 0 {
-		return nil
-	}
-
-	fmt.Printf("start downloading order '%s'\n", name)
-	p := NewPool(tasks, 4)
-	p.Run()
-	var numErrors int
-	for _, task := range p.Tasks {
-		if task.Err != nil {
-			log.Print(task.Err)
-			numErrors++
-		}
-		if numErrors >= 10 {
-			log.Print("Too many errors.")
-			break
-		}
-	}
-	if numErrors > 0 {
-		return fmt.Errorf("order download failed")
-	}
-	return nil
+	return bundleDownloads
 }
 
 func NewFileDownloader(DownloadType humbleDownloadType, dirPath string, altName string) *FileDownloader {
