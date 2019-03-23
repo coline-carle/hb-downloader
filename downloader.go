@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strings"
 )
 
 var (
@@ -55,7 +56,9 @@ func (bd *BundleDownloader) Downloads(order humbleBundleOrder) []*FileDownloader
 		name = order.Product.MachineName
 	}
 
-	outputDir := path.Join(bd.parentDir, removeIllegalCharacters(name))
+	bundleDir := strings.Trim(removeIllegalCharacters(name), " ")
+
+	outputDir := path.Join(bd.parentDir, bundleDir)
 
 	bundleDownloads := []*FileDownloader{}
 
@@ -68,20 +71,20 @@ func (bd *BundleDownloader) Downloads(order humbleBundleOrder) []*FileDownloader
 			// Iterate through download types (PDF,EPUB,MOBI)
 			productDownloads := make([]*FileDownloader, 0, len(download.DownloadTypes))
 			onlyPresent := false
-			for _, DownloadType := range download.DownloadTypes {
-				if bd.exclude != "" && DownloadType.fileExtension() == bd.exclude {
+			for _, downloadType := range download.DownloadTypes {
+				if bd.exclude != "" && downloadType.fileExtension() == bd.exclude {
 					continue
 				}
 				// ifOnly not present, filter right now
-				if !bd.ifOnly && bd.only != "" && DownloadType.fileExtension() != bd.only {
+				if !bd.ifOnly && bd.only != "" && downloadType.fileExtension() != bd.only {
 					continue
 
 				}
 				// ifOnly present memorize if the format is present
-				if bd.ifOnly && bd.only != "" && DownloadType.fileExtension() == bd.only {
+				if bd.ifOnly && bd.only != "" && downloadType.fileExtension() == bd.only {
 					onlyPresent = true
 				}
-				fd := NewFileDownloader(DownloadType, outputDir, product.HumanName)
+				fd := NewFileDownloader(downloadType, outputDir, product.HumanName)
 				productDownloads = append(productDownloads, fd)
 
 			}
@@ -119,6 +122,10 @@ func (fd *FileDownloader) name() string {
 		return fd.httpName
 	}
 	return fd.altName
+}
+
+func (fd *FileDownloader) EstimatedSize() int64 {
+	return fd.DownloadType.FileSize
 }
 
 func (fd *FileDownloader) filename() string {

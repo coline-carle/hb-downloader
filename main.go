@@ -23,13 +23,32 @@ var (
 	list          = flag.Bool("list", false, "list the bundles")
 )
 
+func totalDownloadSize(downloads []*FileDownloader) int64 {
+	var totalSize int64
+	for _, download := range downloads {
+		totalSize += download.EstimatedSize()
+	}
+	return totalSize
+}
+
+func formatedSize(size int64) string {
+	sizeInMiB := size / (1024 * 1024)
+	if sizeInMiB > 1000 {
+		return fmt.Sprintf("%.2f GiB", float64(sizeInMiB)/1024.0)
+	}
+	return fmt.Sprintf("%d MiB", sizeInMiB)
+}
+
 func startDownload(title string, downloads []*FileDownloader) error {
-	fmt.Printf("Downloading '%s'...\n", title)
+	if len(downloads) == 0 {
+		return nil
+	}
+	totalSize := formatedSize(totalDownloadSize(downloads))
+	fmt.Printf("Downloading '%s' (%s)... \n", title, totalSize)
 	return download(downloads)
 }
 
 func download(downloads []*FileDownloader) error {
-
 	if len(downloads) == 0 {
 		return nil
 	}
@@ -93,9 +112,17 @@ func downloadAllBundles(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownload
 		return err
 	}
 
-	for _, bundle := range bundles {
-		downloads := bundleDownloader.Downloads(bundle)
-		err = startDownload(bundle.Product.HumanName, downloads)
+	downloads := make([][]*FileDownloader, len(bundles), len(bundles))
+	for i, bundle := range bundles {
+		downloads[i] = bundleDownloader.Downloads(bundle)
+	}
+	var allBundleSize int64
+	for _, bundleDownlaods := range downloads {
+		allBundleSize += totalDownloadSize(bundleDownlaods)
+	}
+	fmt.Printf("Estimated total size: %s\n", formatedSize(allBundleSize))
+	for i, bundleDownloads := range downloads {
+		err = startDownload(bundles[i].Product.HumanName, bundleDownloads)
 		if err != nil {
 			lastError = err
 		}
