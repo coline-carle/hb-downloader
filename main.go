@@ -6,13 +6,15 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"gopkg.in/cheggaaa/pb.v1"
 )
 
 var (
 	gameKey       = flag.String("key", "", "key: Key listed in the URL params in the downloads page")
 	sessCookie    = flag.String("auth", "", "Account _simpleauth_sess cookie")
 	out           = flag.String("out", "", "out: /path/to/save/books")
-	all           = flag.Bool("all", false, "download all purshases")
+	all           = flag.Bool("all", false, "download all bundles")
 	platform      = flag.String("platform", "", "filter by platform ex: ebook")
 	excludeFormat = flag.String("exclude", "", "exclude a format from the downloads. ex: mobi")
 	onlyFormat    = flag.String("only", "", "only download a certain format. ex: cbz")
@@ -20,22 +22,26 @@ var (
 )
 
 func downloadAll(hbAPI *HumbleBundleAPI, bundleDownloader *BundleDownloader) error {
-	fmt.Println("downloading the list of orders...")
+	fmt.Println("downloading orders details...")
 
 	keys, err := hbAPI.GetOrders()
 	if err != nil {
 		return err
 	}
 	orders := make([]humbleBundleOrder, 0, len(keys))
+	progressbar := pb.New(len(keys))
+	progressbar.Start()
 	for _, key := range keys {
 		order, err := hbAPI.GetOrder(key)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("downloaded file list for order '%s'\n", order.Product.HumanName)
 		orders = append(orders, order)
+		progressbar.Increment()
 
 	}
+	progressbar.Finish()
+
 	var lastError error
 	for _, order := range orders {
 		err := bundleDownloader.Download(order)
