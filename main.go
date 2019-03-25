@@ -55,6 +55,8 @@ func download(downloads []*FileDownloader) error {
 
 	tasks := make([]*Task, len(downloads), len(downloads))
 	for i, downloader := range downloads {
+		// protect closure
+		downloader := downloader
 		tasks[i] = NewTask(func() error { return downloader.Download() })
 	}
 
